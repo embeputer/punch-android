@@ -461,12 +461,24 @@ class MainActivity : ComponentActivity() {
             return
         }
         val origin = normalized.getOrThrow()
-        credentialsStore.save(origin, username.trim().ifBlank { GatewayErrors.DEFAULT_USERNAME }, password.trim())
+        val resolvedUser = username.trim().ifBlank { GatewayErrors.DEFAULT_USERNAME }
+        val wasConfigured = credentialsStore.isConfigured()
+        val previousOrigin = if (wasConfigured) credentialsStore.getOrigin() else null
+        val previousUser = if (wasConfigured) credentialsStore.getUsername() else null
+        credentialsStore.save(origin, resolvedUser, password.trim())
         gatewayUrlDraft.value = origin
-        gatewayUserDraft.value = username.trim().ifBlank { GatewayErrors.DEFAULT_USERNAME }
+        gatewayUserDraft.value = resolvedUser
         gatewayKeyDraft.value = password.trim()
         gatewayPairedState.value = true
-        gatewayClient.sessionId = punchState.value.activeChat()?.sessionId
+        gatewayClient.sessionId = if (
+            wasConfigured &&
+            previousOrigin == origin &&
+            previousUser == resolvedUser
+        ) {
+            punchState.value.activeChat()?.sessionId
+        } else {
+            null
+        }
         gatewayMessageState.value = "Saved. Testing connection…"
         testGateway(silent = false, bypassDebounce = true)
     }

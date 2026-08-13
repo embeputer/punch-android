@@ -45,16 +45,15 @@ class GatewayClient(
                 if (sessionId.isNullOrBlank()) {
                     sessionId = probeSessionId
                 } else {
-                    try {
-                        exchange(
-                            method = "POST",
-                            url = GatewayUrl.abortUrl(origin, probeSessionId),
-                            username = username,
-                            password = password,
-                            body = "{}",
-                        )
-                    } catch (e: Exception) {
-                        Log.d(TAG, "probe session abort failed: ${e.javaClass.simpleName}")
+                    val abort = exchange(
+                        method = "POST",
+                        url = GatewayUrl.abortUrl(origin, probeSessionId),
+                        username = username,
+                        password = password,
+                        body = "{}",
+                    )
+                    if (abort.statusCode !in 200..299) {
+                        Log.d(TAG, "probe session abort failed: HTTP ${abort.statusCode}")
                     }
                 }
             }

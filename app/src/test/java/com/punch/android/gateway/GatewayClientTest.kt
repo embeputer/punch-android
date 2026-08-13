@@ -154,6 +154,7 @@ class GatewayClientTest {
     }
 
     @Test
+    fun healthFailsWhenSessionUnauthorized() {
         val transport = GatewayTransport { method, url, _, _ ->
             if (url.endsWith("/health")) {
                 GatewayHttpResponse(200, """{"ok":true}""")
