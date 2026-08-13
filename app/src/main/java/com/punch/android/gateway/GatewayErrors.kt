@@ -4,13 +4,16 @@ package com.punch.android.gateway
 object GatewayErrors {
     const val DEFAULT_USERNAME = "opencode"
 
+    fun resolveAuthUser(username: String): String =
+        username.trim().ifBlank { DEFAULT_USERNAME }
+
     fun describe(
         statusCode: Int?,
         error: Throwable?,
         body: String? = null,
         username: String? = null,
     ): String {
-        val authUser = username?.trim()?.takeIf { it.isNotBlank() } ?: DEFAULT_USERNAME
+        val authUser = resolveAuthUser(username.orEmpty())
         val blob = buildString {
             append(error?.message.orEmpty())
             var cause = error?.cause

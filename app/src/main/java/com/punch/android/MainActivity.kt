@@ -51,6 +51,7 @@ import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 class MainActivity : ComponentActivity() {
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
     private val inFlight = AtomicReference<Future<*>?>(null)
     private val probeFuture = AtomicReference<Future<*>?>(null)
     private val probeBusy = AtomicBoolean(false)
+    private val probeGeneration = AtomicLong(0)
     @Volatile private var lastProbeAtMs = 0L
 
     private val pttState = mutableStateOf(PttUiState.Idle)
@@ -508,6 +510,7 @@ class MainActivity : ComponentActivity() {
             gatewayMessageState.value = "Testing…"
         }
         probeFuture.getAndSet(null)?.cancel(true)
+        val generation = probeGeneration.get()
         val future = ioExecutor.submit {
             try {
                 val health = gatewayClient.health(
@@ -516,6 +519,7 @@ class MainActivity : ComponentActivity() {
                     credentialsStore.getPassword(),
                 )
                 runOnUiThread {
+                    if (generation != probeGeneration.get()) return@runOnUiThread
                     if (health.ok) {
                         connectionStatusState.value = ConnectionStatus.Connected
                         gatewayPairedState.value = true
@@ -532,17 +536,26 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 Log.d(TAG, "probe ended: ${e.javaClass.simpleName}")
                 runOnUiThread {
+                    if (generation != probeGeneration.get()) return@runOnUiThread
                     connectionStatusState.value = ConnectionStatus.Disconnected
                     if (!silent) {
                         gatewayMessageState.value = "Unreachable: ${e.message ?: "error"}"
                     }
                 }
             } finally {
-                probeBusy.set(false)
-                probeFuture.compareAndSet(future, null)
+                if (generation == probeGeneration.get()) {
+                    probeBusy.set(false)
+                    probeFuture.compareAndSet(future, null)
+                }
             }
         }
         probeFuture.set(future)
+    }
+
+    private fun cancelProbe() {
+        probeGeneration.incrementAndGet()
+        probeFuture.getAndSet(null)?.cancel(true)
+        probeBusy.set(false)
     }
 
     private fun sendToAgent(prompt: String) {
@@ -662,7 +675,7 @@ class MainActivity : ComponentActivity() {
             gatewayClient.cancel()
         }
         inFlight.getAndSet(null)?.cancel(true)
-        probeFuture.getAndSet(null)?.cancel(true)
+        cancelProbe()
         if (connectionStatusState.value == ConnectionStatus.Connecting) {
             connectionStatusState.value =
                 if (credentialsStore.isConfigured()) {

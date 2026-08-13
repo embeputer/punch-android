@@ -32,8 +32,8 @@ class GatewayClient(
                     GatewayErrors.describe(ping.statusCode, null, ping.body, username),
                 )
             }
-            // /health is unauthenticated; GET /session is the auth check.
-            val authed = exchange("GET", GatewayUrl.sessionUrl(origin), username, password, body = null)
+            // /health is unauthenticated; POST /session is the supported auth check.
+            val authed = exchange("POST", GatewayUrl.sessionUrl(origin), username, password, body = "{}")
             if (authed.statusCode !in 200..299) {
                 return GatewayHealth(
                     false,
@@ -174,7 +174,7 @@ class GatewayClient(
         private const val TAG = "PunchPi"
 
         fun authHeaders(username: String, password: String): Map<String, String> {
-            val user = username.trim().ifBlank { GatewayErrors.DEFAULT_USERNAME }
+            val user = GatewayErrors.resolveAuthUser(username)
             val pass = password.trim()
             val token = Base64.encodeToString(
                 "$user:$pass".toByteArray(Charsets.UTF_8),

@@ -94,10 +94,13 @@ class GatewayClientTest {
     }
 
     @Test
-    fun healthUsesHealthThenSession() {
+    fun healthUsesHealthThenPostSession() {
         val calls = mutableListOf<String>()
-        val transport = GatewayTransport { method, url, _, _ ->
+        val transport = GatewayTransport { method, url, _, body ->
             calls += "$method $url"
+            if (method == "POST" && url.endsWith("/session")) {
+                assertEquals("{}", body)
+            }
             GatewayHttpResponse(200, """{"ok":true,"tools":["bash"]}""")
         }
         val health = GatewayClient(transport).health("https://100.64.1.1:4096", "u", "p")
@@ -105,7 +108,7 @@ class GatewayClientTest {
         assertEquals(
             listOf(
                 "GET https://100.64.1.1:4096/health",
-                "GET https://100.64.1.1:4096/session",
+                "POST https://100.64.1.1:4096/session",
             ),
             calls,
         )
@@ -113,11 +116,13 @@ class GatewayClientTest {
 
     @Test
     fun healthFailsWhenSessionUnauthorized() {
-        val transport = GatewayTransport { _, url, _, _ ->
+        val transport = GatewayTransport { method, url, _, _ ->
             if (url.endsWith("/health")) {
                 GatewayHttpResponse(200, """{"ok":true}""")
-            } else {
+            } else if (method == "POST" && url.endsWith("/session")) {
                 GatewayHttpResponse(401, "Unauthorized")
+            } else {
+                GatewayHttpResponse(404, "not found")
             }
         }
         val health = GatewayClient(transport).health("http://10.0.0.2:4096", "customuser", "wrong")
@@ -128,11 +133,13 @@ class GatewayClientTest {
 
     @Test
     fun healthFailsWhenSessionForbidden() {
-        val transport = GatewayTransport { _, url, _, _ ->
+        val transport = GatewayTransport { method, url, _, _ ->
             if (url.endsWith("/health")) {
                 GatewayHttpResponse(200, """{"ok":true}""")
-            } else {
+            } else if (method == "POST" && url.endsWith("/session")) {
                 GatewayHttpResponse(403, "Forbidden")
+            } else {
+                GatewayHttpResponse(404, "not found")
             }
         }
         val health = GatewayClient(transport).health("http://10.0.0.2:4096", "opencode", "secret")
@@ -142,11 +149,13 @@ class GatewayClientTest {
 
     @Test
     fun healthFailsWhenRateLimited() {
-        val transport = GatewayTransport { _, url, _, _ ->
+        val transport = GatewayTransport { method, url, _, _ ->
             if (url.endsWith("/health")) {
                 GatewayHttpResponse(200, """{"ok":true}""")
-            } else {
+            } else if (method == "POST" && url.endsWith("/session")) {
                 GatewayHttpResponse(429, "rate limit")
+            } else {
+                GatewayHttpResponse(404, "not found")
             }
         }
         val health = GatewayClient(transport).health("http://10.0.0.2:4096", "opencode", "secret")
@@ -202,6 +211,13 @@ class GatewayErrorsTest {
         val detail = GatewayErrors.describe(401, null, "Unauthorized", username = "myuser")
         assertTrue(detail.contains("myuser"))
         assertFalse(detail.contains("opencode"))
+    }
+
+    @Test
+    fun resolveAuthUserDefaultsBlankToOpencode() {
+        assertEquals("opencode", GatewayErrors.resolveAuthUser(""))
+        assertEquals("opencode", GatewayErrors.resolveAuthUser("   "))
+        assertEquals("pi", GatewayErrors.resolveAuthUser(" pi "))
     }
 
     @Test
