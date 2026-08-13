@@ -115,7 +115,7 @@ class GatewayClientTest {
     }
 
     @Test
-    fun healthRetainsProbeSessionId() {
+    fun healthRetainsProbeSessionIdWhenUnset() {
         val transport = GatewayTransport { method, url, _, _ ->
             when {
                 url.endsWith("/health") -> GatewayHttpResponse(200, """{"ok":true}""")
@@ -128,6 +128,29 @@ class GatewayClientTest {
         val health = client.health("http://10.0.0.2:4096", "opencode", "secret")
         assertTrue(health.ok)
         assertEquals("probe-sess", client.sessionId)
+    }
+
+    @Test
+    fun healthAbortsProbeSessionWhenActiveSessionExists() {
+        val calls = mutableListOf<String>()
+        val transport = GatewayTransport { method, url, _, _ ->
+            calls += "$method $url"
+            when {
+                url.endsWith("/health") -> GatewayHttpResponse(200, """{"ok":true}""")
+                method == "POST" && url.endsWith("/session") ->
+                    GatewayHttpResponse(200, """{"id":"probe-sess"}""")
+                url.endsWith("/session/probe-sess/abort") -> GatewayHttpResponse(200, "{}")
+                else -> GatewayHttpResponse(404, "not found")
+            }
+        }
+        val client = GatewayClient(transport)
+        client.sessionId = "existing-sess"
+        val health = client.health("http://10.0.0.2:4096", "opencode", "secret")
+        assertTrue(health.ok)
+        assertEquals("existing-sess", client.sessionId)
+        assertTrue(
+            calls.contains("POST http://10.0.0.2:4096/session/probe-sess/abort"),
+        )
     }
 
     @Test

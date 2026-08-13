@@ -42,7 +42,21 @@ class GatewayClient(
             }
             val probeSessionId = runCatching { JSONObject(authed.body).optString("id") }.getOrNull()
             if (!probeSessionId.isNullOrBlank()) {
-                sessionId = probeSessionId
+                if (sessionId.isNullOrBlank()) {
+                    sessionId = probeSessionId
+                } else {
+                    try {
+                        exchange(
+                            method = "POST",
+                            url = GatewayUrl.abortUrl(origin, probeSessionId),
+                            username = username,
+                            password = password,
+                            body = "{}",
+                        )
+                    } catch (e: Exception) {
+                        Log.d(TAG, "probe session abort failed: ${e.javaClass.simpleName}")
+                    }
+                }
             }
             GatewayHealth(ok = true, detail = "HTTP ${ping.statusCode}")
         } catch (e: Exception) {
