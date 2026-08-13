@@ -526,7 +526,8 @@ class MainActivity : ComponentActivity() {
         }
         probeFuture.getAndSet(null)?.cancel(true)
         val generation = probeGeneration.get()
-        val future = ioExecutor.submit {
+        var future: Future<*>? = null
+        future = ioExecutor.submit {
             try {
                 val health = gatewayClient.health(
                     credentialsStore.getOrigin(),
@@ -560,11 +561,11 @@ class MainActivity : ComponentActivity() {
             } finally {
                 if (generation == probeGeneration.get()) {
                     probeBusy.set(false)
-                    probeFuture.compareAndSet(future, null)
+                    future?.let { probeFuture.compareAndSet(it, null) }
                 }
             }
         }
-        probeFuture.set(future)
+        probeFuture.set(requireNotNull(future))
     }
 
     private fun cancelProbe() {
