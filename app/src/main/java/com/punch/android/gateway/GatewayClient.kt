@@ -40,6 +40,10 @@ class GatewayClient(
                     GatewayErrors.describe(authed.statusCode, null, authed.body, username),
                 )
             }
+            val probeSessionId = runCatching { JSONObject(authed.body).optString("id") }.getOrNull()
+            if (!probeSessionId.isNullOrBlank()) {
+                sessionId = probeSessionId
+            }
             GatewayHealth(ok = true, detail = "HTTP ${ping.statusCode}")
         } catch (e: Exception) {
             Log.d(TAG, "health failed: ${e.javaClass.simpleName}")

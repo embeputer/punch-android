@@ -115,7 +115,22 @@ class GatewayClientTest {
     }
 
     @Test
-    fun healthFailsWhenSessionUnauthorized() {
+    fun healthRetainsProbeSessionId() {
+        val transport = GatewayTransport { method, url, _, _ ->
+            when {
+                url.endsWith("/health") -> GatewayHttpResponse(200, """{"ok":true}""")
+                method == "POST" && url.endsWith("/session") ->
+                    GatewayHttpResponse(200, """{"id":"probe-sess"}""")
+                else -> GatewayHttpResponse(404, "not found")
+            }
+        }
+        val client = GatewayClient(transport)
+        val health = client.health("http://10.0.0.2:4096", "opencode", "secret")
+        assertTrue(health.ok)
+        assertEquals("probe-sess", client.sessionId)
+    }
+
+    @Test
         val transport = GatewayTransport { method, url, _, _ ->
             if (url.endsWith("/health")) {
                 GatewayHttpResponse(200, """{"ok":true}""")
