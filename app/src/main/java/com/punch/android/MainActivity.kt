@@ -462,18 +462,21 @@ class MainActivity : ComponentActivity() {
         }
         val origin = normalized.getOrThrow()
         val resolvedUser = username.trim().ifBlank { GatewayErrors.DEFAULT_USERNAME }
+        val resolvedPassword = password.trim()
         val wasConfigured = credentialsStore.isConfigured()
         val previousOrigin = if (wasConfigured) credentialsStore.getOrigin() else null
         val previousUser = if (wasConfigured) credentialsStore.getUsername() else null
-        credentialsStore.save(origin, resolvedUser, password.trim())
+        val previousPassword = if (wasConfigured) credentialsStore.getPassword() else null
+        credentialsStore.save(origin, resolvedUser, resolvedPassword)
         gatewayUrlDraft.value = origin
         gatewayUserDraft.value = resolvedUser
-        gatewayKeyDraft.value = password.trim()
+        gatewayKeyDraft.value = resolvedPassword
         gatewayPairedState.value = true
         gatewayClient.sessionId = if (
             wasConfigured &&
             previousOrigin == origin &&
-            previousUser == resolvedUser
+            previousUser == resolvedUser &&
+            previousPassword == resolvedPassword
         ) {
             punchState.value.activeChat()?.sessionId
         } else {
