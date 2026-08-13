@@ -341,7 +341,7 @@ private fun MessageList(
     ) {
         items(messages, key = { it.id }) { message ->
             if (message.role == "user") {
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
                     Text(
                         text = message.text,
                         color = PunchIvory,
@@ -354,11 +354,7 @@ private fun MessageList(
                 }
             } else {
                 Column(Modifier.fillMaxWidth()) {
-                    Text(
-                        text = message.text,
-                        color = PunchIvory,
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
+                    MarkdownText(text = message.text)
                     Row(Modifier.padding(top = 8.dp)) {
                         TextButton(onClick = { clipboard.setText(AnnotatedString(message.text)) }) {
                             Text("Copy", color = PunchMuted)
