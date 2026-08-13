@@ -4,7 +4,13 @@ package com.punch.android.gateway
 object GatewayErrors {
     const val DEFAULT_USERNAME = "opencode"
 
-    fun describe(statusCode: Int?, error: Throwable?, body: String? = null): String {
+    fun describe(
+        statusCode: Int?,
+        error: Throwable?,
+        body: String? = null,
+        username: String? = null,
+    ): String {
+        val authUser = username?.trim()?.takeIf { it.isNotBlank() } ?: DEFAULT_USERNAME
         val blob = buildString {
             append(error?.message.orEmpty())
             var cause = error?.cause
@@ -19,7 +25,7 @@ object GatewayErrors {
                 "use http://<tailscale-name>:4096. Use https:// only if Tailscale Serve is on 443."
         }
         if (looksLikeAuthRetryStorm(blob)) {
-            return "Unauthorized (401). HTTP Basic was sent as user $DEFAULT_USERNAME; " +
+            return "Unauthorized (401). HTTP Basic was sent as user $authUser; " +
                 "password does not match OPENCODE_SERVER_PASSWORD."
         }
         if (statusCode == 429 ||
@@ -29,7 +35,7 @@ object GatewayErrors {
             return "Rate limited (429). Wait a bit, then Test once."
         }
         if (statusCode == 401 || body?.contains("Unauthorized", ignoreCase = true) == true) {
-            return "Unauthorized (401). HTTP Basic was sent as user $DEFAULT_USERNAME; " +
+            return "Unauthorized (401). HTTP Basic was sent as user $authUser; " +
                 "password does not match OPENCODE_SERVER_PASSWORD."
         }
         if (statusCode != null) return "HTTP $statusCode"

@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
     private val gatewayClient = GatewayClient()
     private val ioExecutor = Executors.newSingleThreadExecutor()
     private val inFlight = AtomicReference<Future<*>?>(null)
+    private val probeFuture = AtomicReference<Future<*>?>(null)
     private val probeBusy = AtomicBoolean(false)
     @Volatile private var lastProbeAtMs = 0L
 
@@ -465,7 +466,7 @@ class MainActivity : ComponentActivity() {
         gatewayPairedState.value = true
         gatewayClient.sessionId = punchState.value.activeChat()?.sessionId
         gatewayMessageState.value = "Saved. Testing connection…"
-        testGateway(silent = false)
+        testGateway(silent = false, bypassDebounce = true)
     }
 
     private fun clearGateway() {
@@ -480,7 +481,7 @@ class MainActivity : ComponentActivity() {
         gatewayMessageState.value = "Pi pairing cleared"
     }
 
-    private fun testGateway(silent: Boolean) {
+    private fun testGateway(silent: Boolean, bypassDebounce: Boolean = false) {
         if (!credentialsStore.isConfigured()) {
             if (!silent) {
                 gatewayMessageState.value = "Save a Pi gateway URL first"
@@ -489,7 +490,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val now = System.currentTimeMillis()
-        if (now - lastProbeAtMs < 2_000L) {
+        if (!bypassDebounce && now - lastProbeAtMs < 2_000L) {
             if (!silent) {
                 gatewayMessageState.value = "Slow down — wait a second before testing again"
             }
@@ -506,7 +507,8 @@ class MainActivity : ComponentActivity() {
         if (!silent) {
             gatewayMessageState.value = "Testing…"
         }
-        ioExecutor.submit {
+        probeFuture.getAndSet(null)?.cancel(true)
+        val future = ioExecutor.submit {
             try {
                 val health = gatewayClient.health(
                     credentialsStore.getOrigin(),
@@ -537,8 +539,10 @@ class MainActivity : ComponentActivity() {
                 }
             } finally {
                 probeBusy.set(false)
+                probeFuture.compareAndSet(future, null)
             }
         }
+        probeFuture.set(future)
     }
 
     private fun sendToAgent(prompt: String) {
@@ -658,6 +662,7 @@ class MainActivity : ComponentActivity() {
             gatewayClient.cancel()
         }
         inFlight.getAndSet(null)?.cancel(true)
+        probeFuture.getAndSet(null)?.cancel(true)
         if (connectionStatusState.value == ConnectionStatus.Connecting) {
             connectionStatusState.value =
                 if (credentialsStore.isConfigured()) {

@@ -120,10 +120,24 @@ class GatewayClientTest {
                 GatewayHttpResponse(401, "Unauthorized")
             }
         }
-        val health = GatewayClient(transport).health("http://10.0.0.2:4096", "", "wrong")
+        val health = GatewayClient(transport).health("http://10.0.0.2:4096", "customuser", "wrong")
         assertFalse(health.ok)
         assertTrue(health.detail.contains("401"))
-        assertTrue(health.detail.contains("opencode"))
+        assertTrue(health.detail.contains("customuser"))
+    }
+
+    @Test
+    fun healthFailsWhenSessionForbidden() {
+        val transport = GatewayTransport { _, url, _, _ ->
+            if (url.endsWith("/health")) {
+                GatewayHttpResponse(200, """{"ok":true}""")
+            } else {
+                GatewayHttpResponse(403, "Forbidden")
+            }
+        }
+        val health = GatewayClient(transport).health("http://10.0.0.2:4096", "opencode", "secret")
+        assertFalse(health.ok)
+        assertTrue(health.detail.contains("403"))
     }
 
     @Test
@@ -181,6 +195,13 @@ class GatewayErrorsTest {
         val detail = GatewayErrors.describe(401, null, "Unauthorized")
         assertTrue(detail.contains("opencode"))
         assertTrue(detail.contains("OPENCODE_SERVER_PASSWORD"))
+    }
+
+    @Test
+    fun unauthorizedUsesProvidedUsername() {
+        val detail = GatewayErrors.describe(401, null, "Unauthorized", username = "myuser")
+        assertTrue(detail.contains("myuser"))
+        assertFalse(detail.contains("opencode"))
     }
 
     @Test

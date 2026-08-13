@@ -27,17 +27,23 @@ class GatewayClient(
         return try {
             val ping = exchange("GET", GatewayUrl.healthUrl(origin), username, password, body = null)
             if (ping.statusCode !in 200..299) {
-                return GatewayHealth(false, GatewayErrors.describe(ping.statusCode, null, ping.body))
+                return GatewayHealth(
+                    false,
+                    GatewayErrors.describe(ping.statusCode, null, ping.body, username),
+                )
             }
             // /health is unauthenticated; GET /session is the auth check.
             val authed = exchange("GET", GatewayUrl.sessionUrl(origin), username, password, body = null)
-            if (authed.statusCode == 401 || authed.statusCode == 429) {
-                return GatewayHealth(false, GatewayErrors.describe(authed.statusCode, null, authed.body))
+            if (authed.statusCode !in 200..299) {
+                return GatewayHealth(
+                    false,
+                    GatewayErrors.describe(authed.statusCode, null, authed.body, username),
+                )
             }
             GatewayHealth(ok = true, detail = "HTTP ${ping.statusCode}")
         } catch (e: Exception) {
             Log.d(TAG, "health failed: ${e.javaClass.simpleName}")
-            GatewayHealth(ok = false, detail = GatewayErrors.describe(null, e))
+            GatewayHealth(ok = false, detail = GatewayErrors.describe(null, e, username = username))
         }
     }
 
@@ -78,9 +84,9 @@ class GatewayClient(
                 password = password,
                 body = payload,
             )
-            return parseAssistant(retry, retrySid)
+            return parseAssistant(retry, retrySid, username)
         }
-        return parseAssistant(response, sid)
+        return parseAssistant(response, sid, username)
     }
 
     fun abort(origin: String, username: String, password: String) {
@@ -119,7 +125,7 @@ class GatewayClient(
         )
         if (response.statusCode !in 200..299) {
             throw GatewayException(
-                message = GatewayErrors.describe(response.statusCode, null, response.body),
+                message = GatewayErrors.describe(response.statusCode, null, response.body, username),
                 statusCode = response.statusCode,
             )
         }
@@ -132,12 +138,16 @@ class GatewayClient(
         return id
     }
 
-    private fun parseAssistant(response: GatewayHttpResponse, sid: String): GatewayChatResult {
+    private fun parseAssistant(
+        response: GatewayHttpResponse,
+        sid: String,
+        username: String,
+    ): GatewayChatResult {
         if (response.statusCode !in 200..299) {
             val err = runCatching { JSONObject(response.body).optString("error") }.getOrNull()
             throw GatewayException(
                 message = err?.takeIf { it.isNotBlank() }
-                    ?: GatewayErrors.describe(response.statusCode, null, response.body),
+                    ?: GatewayErrors.describe(response.statusCode, null, response.body, username),
                 statusCode = response.statusCode,
             )
         }
