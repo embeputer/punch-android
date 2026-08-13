@@ -2,6 +2,7 @@ package com.punch.android.gateway
 
 import android.util.Base64
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -93,16 +94,50 @@ class GatewayClientTest {
     }
 
     @Test
-    fun healthUsesHealthEndpoint() {
-        var capturedUrl = ""
+    fun healthUsesHealthThenSession() {
+        val calls = mutableListOf<String>()
         val transport = GatewayTransport { method, url, _, _ ->
-            assertEquals("GET", method)
-            capturedUrl = url
+            calls += "$method $url"
             GatewayHttpResponse(200, """{"ok":true,"tools":["bash"]}""")
         }
         val health = GatewayClient(transport).health("https://100.64.1.1:4096", "u", "p")
         assertTrue(health.ok)
-        assertEquals("https://100.64.1.1:4096/health", capturedUrl)
+        assertEquals(
+            listOf(
+                "GET https://100.64.1.1:4096/health",
+                "GET https://100.64.1.1:4096/session",
+            ),
+            calls,
+        )
+    }
+
+    @Test
+    fun healthFailsWhenSessionUnauthorized() {
+        val transport = GatewayTransport { _, url, _, _ ->
+            if (url.endsWith("/health")) {
+                GatewayHttpResponse(200, """{"ok":true}""")
+            } else {
+                GatewayHttpResponse(401, "Unauthorized")
+            }
+        }
+        val health = GatewayClient(transport).health("http://10.0.0.2:4096", "", "wrong")
+        assertFalse(health.ok)
+        assertTrue(health.detail.contains("401"))
+        assertTrue(health.detail.contains("opencode"))
+    }
+
+    @Test
+    fun healthFailsWhenRateLimited() {
+        val transport = GatewayTransport { _, url, _, _ ->
+            if (url.endsWith("/health")) {
+                GatewayHttpResponse(200, """{"ok":true}""")
+            } else {
+                GatewayHttpResponse(429, "rate limit")
+            }
+        }
+        val health = GatewayClient(transport).health("http://10.0.0.2:4096", "opencode", "secret")
+        assertFalse(health.ok)
+        assertTrue(health.detail.contains("429"))
     }
 
     @Test
@@ -111,5 +146,57 @@ class GatewayClientTest {
         val encoded = header.removePrefix("Basic ")
         val decoded = String(Base64.decode(encoded, Base64.NO_WRAP))
         assertEquals("opencode:devpassword", decoded)
+    }
+
+    @Test
+    fun blankUsernameSendsOpencodeBasic() {
+        val header = GatewayClient.authHeaders("", "secret")["Authorization"]!!
+        val decoded = String(Base64.decode(header.removePrefix("Basic "), Base64.NO_WRAP))
+        assertEquals("opencode:secret", decoded)
+    }
+
+    @Test
+    fun trimsPasswordBeforeEncoding() {
+        val header = GatewayClient.authHeaders("opencode", " secret \n")["Authorization"]!!
+        val decoded = String(Base64.decode(header.removePrefix("Basic "), Base64.NO_WRAP))
+        assertEquals("opencode:secret", decoded)
+    }
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class GatewayErrorsTest {
+    @Test
+    fun tlsPacketHeaderPointsAtHttp() {
+        val detail = GatewayErrors.describe(
+            statusCode = null,
+            error = javax.net.ssl.SSLHandshakeException("Unable to parse TLS packet header"),
+        )
+        assertTrue(detail.contains("http://"))
+        assertTrue(detail.contains("4096"))
+    }
+
+    @Test
+    fun unauthorizedPointsAtBasicAuth() {
+        val detail = GatewayErrors.describe(401, null, "Unauthorized")
+        assertTrue(detail.contains("opencode"))
+        assertTrue(detail.contains("OPENCODE_SERVER_PASSWORD"))
+    }
+
+    @Test
+    fun followUpStormIsUnauthorized() {
+        val detail = GatewayErrors.describe(
+            statusCode = null,
+            error = java.net.ProtocolException("Too many follow-up requests: 21"),
+        )
+        assertTrue(detail.contains("401"))
+        assertTrue(detail.contains("opencode"))
+    }
+
+    @Test
+    fun rateLimitedIsExplicit() {
+        val detail = GatewayErrors.describe(429, null, "too many requests")
+        assertTrue(detail.contains("429"))
+        assertTrue(detail.contains("Wait"))
     }
 }

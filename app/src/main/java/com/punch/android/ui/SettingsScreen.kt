@@ -96,7 +96,7 @@ fun SettingsScreen(
 
         Text("PI", style = MaterialTheme.typography.titleSmall, color = PunchMuted)
         Text(
-            text = "Point Punch at a Pi coding-agent HTTP gateway. http:// for LAN, https:// for Tailscale.",
+            text = "This app sends HTTP Basic (username opencode). Use http:// even over Tailscale — port 4096 is plain HTTP. Password is OPENCODE_SERVER_PASSWORD.",
             style = MaterialTheme.typography.bodySmall,
             color = PunchMuted,
         )
@@ -128,7 +128,8 @@ fun SettingsScreen(
             value = gatewayUsername,
             onValueChange = onGatewayUsernameChange,
             modifier = Modifier.fillMaxWidth().testTag("gateway_username_field"),
-            label = { Text("Username (optional)") },
+            label = { Text("Username") },
+            placeholder = { Text("opencode") },
             singleLine = true,
             shape = RoundedCornerShape(16.dp),
             colors = fieldColors,
@@ -137,7 +138,7 @@ fun SettingsScreen(
             value = gatewayApiKey,
             onValueChange = onGatewayApiKeyChange,
             modifier = Modifier.fillMaxWidth().testTag("gateway_api_key_field"),
-            label = { Text("Password (optional)") },
+            label = { Text("Password") },
             singleLine = true,
             shape = RoundedCornerShape(16.dp),
             colors = fieldColors,
@@ -145,13 +146,19 @@ fun SettingsScreen(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val busy = connectionStatus == ConnectionStatus.Connecting
             Button(
                 onClick = onSaveGateway,
+                enabled = !busy,
                 modifier = Modifier.testTag("gateway_save_button"),
                 colors = ButtonDefaults.buttonColors(containerColor = PunchMint, contentColor = PunchInk),
             ) { Text("Save") }
-            OutlinedButton(onClick = onTestGateway, modifier = Modifier.testTag("gateway_test_button")) {
-                Text("Test", color = PunchIvory)
+            OutlinedButton(
+                onClick = onTestGateway,
+                enabled = !busy,
+                modifier = Modifier.testTag("gateway_test_button"),
+            ) {
+                Text(if (busy) "Testing…" else "Test", color = PunchIvory)
             }
             OutlinedButton(onClick = onClearGateway, modifier = Modifier.testTag("gateway_clear_button")) {
                 Text("Clear", color = PunchIvory)

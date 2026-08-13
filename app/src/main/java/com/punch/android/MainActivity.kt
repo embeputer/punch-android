@@ -35,6 +35,7 @@ import com.punch.android.data.PunchStore
 import com.punch.android.data.StoredFile
 import com.punch.android.gateway.GatewayClient
 import com.punch.android.gateway.GatewayCredentialsStore
+import com.punch.android.gateway.GatewayErrors
 import com.punch.android.gateway.GatewayException
 import com.punch.android.gateway.GatewayUrl
 import com.punch.android.input.AndroidSpeechTranscriber
@@ -49,6 +50,7 @@ import com.punch.android.ui.theme.PunchTheme
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 class MainActivity : ComponentActivity() {
@@ -58,6 +60,8 @@ class MainActivity : ComponentActivity() {
     private val gatewayClient = GatewayClient()
     private val ioExecutor = Executors.newSingleThreadExecutor()
     private val inFlight = AtomicReference<Future<*>?>(null)
+    private val probeBusy = AtomicBoolean(false)
+    @Volatile private var lastProbeAtMs = 0L
 
     private val pttState = mutableStateOf(PttUiState.Idle)
     private val micGrantedState = mutableStateOf(false)
@@ -454,10 +458,10 @@ class MainActivity : ComponentActivity() {
             return
         }
         val origin = normalized.getOrThrow()
-        credentialsStore.save(origin, username.trim(), password)
+        credentialsStore.save(origin, username.trim().ifBlank { GatewayErrors.DEFAULT_USERNAME }, password.trim())
         gatewayUrlDraft.value = origin
-        gatewayUserDraft.value = username.trim()
-        gatewayKeyDraft.value = password
+        gatewayUserDraft.value = username.trim().ifBlank { GatewayErrors.DEFAULT_USERNAME }
+        gatewayKeyDraft.value = password.trim()
         gatewayPairedState.value = true
         gatewayClient.sessionId = punchState.value.activeChat()?.sessionId
         gatewayMessageState.value = "Saved. Testing connection…"
@@ -484,29 +488,55 @@ class MainActivity : ComponentActivity() {
             connectionStatusState.value = ConnectionStatus.Disconnected
             return
         }
+        val now = System.currentTimeMillis()
+        if (now - lastProbeAtMs < 2_000L) {
+            if (!silent) {
+                gatewayMessageState.value = "Slow down — wait a second before testing again"
+            }
+            return
+        }
+        if (!probeBusy.compareAndSet(false, true)) {
+            if (!silent) {
+                gatewayMessageState.value = "Already testing…"
+            }
+            return
+        }
+        lastProbeAtMs = now
         connectionStatusState.value = ConnectionStatus.Connecting
         if (!silent) {
             gatewayMessageState.value = "Testing…"
         }
-        submitIo {
-            val health = gatewayClient.health(
-                credentialsStore.getOrigin(),
-                credentialsStore.getUsername(),
-                credentialsStore.getPassword(),
-            )
-            runOnUiThread {
-                if (health.ok) {
-                    connectionStatusState.value = ConnectionStatus.Connected
-                    gatewayPairedState.value = true
-                    if (!silent) {
-                        gatewayMessageState.value = "Connected (${health.detail})"
-                    }
-                } else {
-                    connectionStatusState.value = ConnectionStatus.Disconnected
-                    if (!silent) {
-                        gatewayMessageState.value = "Unreachable: ${health.detail}"
+        ioExecutor.submit {
+            try {
+                val health = gatewayClient.health(
+                    credentialsStore.getOrigin(),
+                    credentialsStore.getUsername(),
+                    credentialsStore.getPassword(),
+                )
+                runOnUiThread {
+                    if (health.ok) {
+                        connectionStatusState.value = ConnectionStatus.Connected
+                        gatewayPairedState.value = true
+                        if (!silent) {
+                            gatewayMessageState.value = "Connected (${health.detail})"
+                        }
+                    } else {
+                        connectionStatusState.value = ConnectionStatus.Disconnected
+                        if (!silent) {
+                            gatewayMessageState.value = "Unreachable: ${health.detail}"
+                        }
                     }
                 }
+            } catch (e: Exception) {
+                Log.d(TAG, "probe ended: ${e.javaClass.simpleName}")
+                runOnUiThread {
+                    connectionStatusState.value = ConnectionStatus.Disconnected
+                    if (!silent) {
+                        gatewayMessageState.value = "Unreachable: ${e.message ?: "error"}"
+                    }
+                }
+            } finally {
+                probeBusy.set(false)
             }
         }
     }
