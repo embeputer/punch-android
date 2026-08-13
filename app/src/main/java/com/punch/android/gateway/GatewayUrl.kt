@@ -4,7 +4,7 @@ import java.net.URI
 
 /**
  * Normalizes user-entered Pi gateway origins.
- * Accepts http/https for LAN and Tailscale.
+ * Accepts http/https. Tailscale MagicDNS to :4096 is still http.
  */
 object GatewayUrl {
     fun normalizeOrigin(raw: String): Result<String> {

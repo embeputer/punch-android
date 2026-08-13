@@ -74,15 +74,16 @@ The Pi TypeScript SDK (`createAgentSession`) cannot run on Android. Punch uses t
 - `POST /session/{id}/message` with `{ "parts": [{ "type": "text", "text": "..." }, ...] }`
 - `POST /session/{id}/abort`
 
-Auth is HTTP Basic when a username is set; password-only uses Bearer. Both **HTTP** (LAN) and **HTTPS** (Tailscale / TLS) are supported.
+Auth is HTTP Basic. Username defaults to `opencode`; password is `OPENCODE_SERVER_PASSWORD`. Punch `pi-gateway` on **4096** is **plain HTTP** even over Tailscale — `https://…:4096` will fail with a TLS parse error. Use `https://` only if you terminated TLS (Tailscale Serve on 443).
 
 ### Pair from the phone
 
 1. Run a Pi HTTP gateway on the host (Punch `pi-gateway` on port **4096**, or equivalent).
 2. In Punch, open Settings and enter:
    - LAN: `http://<host-lan-ip>:4096`
-   - Tailscale: `https://<tailscale-name-or-ip>:4096` (or `http://` if that is what you expose)
-   - Username / password if the gateway requires Basic auth
+   - Tailscale: `http://<tailscale-name-or-ip>:4096`
+   - Username `opencode` (or leave blank; Punch fills that in)
+   - Password = `OPENCODE_SERVER_PASSWORD`
 3. Tap **Save**, then **Test**.
 4. Type a prompt and send, or hold the mic in the Ask bar.
 

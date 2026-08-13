@@ -2,6 +2,7 @@ package com.punch.android.gateway
 
 import android.util.Base64
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -93,16 +94,130 @@ class GatewayClientTest {
     }
 
     @Test
-    fun healthUsesHealthEndpoint() {
-        var capturedUrl = ""
-        val transport = GatewayTransport { method, url, _, _ ->
-            assertEquals("GET", method)
-            capturedUrl = url
+    fun healthUsesHealthThenPostSession() {
+        val calls = mutableListOf<String>()
+        val transport = GatewayTransport { method, url, _, body ->
+            calls += "$method $url"
+            if (method == "POST" && url.endsWith("/session")) {
+                assertEquals("{}", body)
+            }
             GatewayHttpResponse(200, """{"ok":true,"tools":["bash"]}""")
         }
         val health = GatewayClient(transport).health("https://100.64.1.1:4096", "u", "p")
         assertTrue(health.ok)
-        assertEquals("https://100.64.1.1:4096/health", capturedUrl)
+        assertEquals(
+            listOf(
+                "GET https://100.64.1.1:4096/health",
+                "POST https://100.64.1.1:4096/session",
+            ),
+            calls,
+        )
+    }
+
+    @Test
+    fun healthRetainsProbeSessionIdWhenUnset() {
+        val transport = GatewayTransport { method, url, _, _ ->
+            when {
+                url.endsWith("/health") -> GatewayHttpResponse(200, """{"ok":true}""")
+                method == "POST" && url.endsWith("/session") ->
+                    GatewayHttpResponse(200, """{"id":"probe-sess"}""")
+                else -> GatewayHttpResponse(404, "not found")
+            }
+        }
+        val client = GatewayClient(transport)
+        val health = client.health("http://10.0.0.2:4096", "opencode", "secret")
+        assertTrue(health.ok)
+        assertEquals("probe-sess", client.sessionId)
+    }
+
+    @Test
+    fun healthAbortsProbeSessionWhenActiveSessionExists() {
+        val calls = mutableListOf<String>()
+        val transport = GatewayTransport { method, url, _, _ ->
+            calls += "$method $url"
+            when {
+                url.endsWith("/health") -> GatewayHttpResponse(200, """{"ok":true}""")
+                method == "POST" && url.endsWith("/session") ->
+                    GatewayHttpResponse(200, """{"id":"probe-sess"}""")
+                url.endsWith("/session/probe-sess/abort") -> GatewayHttpResponse(200, "{}")
+                else -> GatewayHttpResponse(404, "not found")
+            }
+        }
+        val client = GatewayClient(transport)
+        client.sessionId = "existing-sess"
+        val health = client.health("http://10.0.0.2:4096", "opencode", "secret")
+        assertTrue(health.ok)
+        assertEquals("existing-sess", client.sessionId)
+        assertTrue(
+            calls.contains("POST http://10.0.0.2:4096/session/probe-sess/abort"),
+        )
+    }
+
+    @Test
+    fun healthLogsFailedProbeAbort() {
+        val transport = GatewayTransport { method, url, _, _ ->
+            when {
+                url.endsWith("/health") -> GatewayHttpResponse(200, """{"ok":true}""")
+                method == "POST" && url.endsWith("/session") ->
+                    GatewayHttpResponse(200, """{"id":"probe-sess"}""")
+                url.endsWith("/session/probe-sess/abort") -> GatewayHttpResponse(500, "error")
+                else -> GatewayHttpResponse(404, "not found")
+            }
+        }
+        val client = GatewayClient(transport)
+        client.sessionId = "existing-sess"
+        val health = client.health("http://10.0.0.2:4096", "opencode", "secret")
+        assertTrue(health.ok)
+        assertEquals("existing-sess", client.sessionId)
+    }
+
+    @Test
+    fun healthFailsWhenSessionUnauthorized() {
+        val transport = GatewayTransport { method, url, _, _ ->
+            if (url.endsWith("/health")) {
+                GatewayHttpResponse(200, """{"ok":true}""")
+            } else if (method == "POST" && url.endsWith("/session")) {
+                GatewayHttpResponse(401, "Unauthorized")
+            } else {
+                GatewayHttpResponse(404, "not found")
+            }
+        }
+        val health = GatewayClient(transport).health("http://10.0.0.2:4096", "customuser", "wrong")
+        assertFalse(health.ok)
+        assertTrue(health.detail.contains("401"))
+        assertTrue(health.detail.contains("customuser"))
+    }
+
+    @Test
+    fun healthFailsWhenSessionForbidden() {
+        val transport = GatewayTransport { method, url, _, _ ->
+            if (url.endsWith("/health")) {
+                GatewayHttpResponse(200, """{"ok":true}""")
+            } else if (method == "POST" && url.endsWith("/session")) {
+                GatewayHttpResponse(403, "Forbidden")
+            } else {
+                GatewayHttpResponse(404, "not found")
+            }
+        }
+        val health = GatewayClient(transport).health("http://10.0.0.2:4096", "opencode", "secret")
+        assertFalse(health.ok)
+        assertTrue(health.detail.contains("403"))
+    }
+
+    @Test
+    fun healthFailsWhenRateLimited() {
+        val transport = GatewayTransport { method, url, _, _ ->
+            if (url.endsWith("/health")) {
+                GatewayHttpResponse(200, """{"ok":true}""")
+            } else if (method == "POST" && url.endsWith("/session")) {
+                GatewayHttpResponse(429, "rate limit")
+            } else {
+                GatewayHttpResponse(404, "not found")
+            }
+        }
+        val health = GatewayClient(transport).health("http://10.0.0.2:4096", "opencode", "secret")
+        assertFalse(health.ok)
+        assertTrue(health.detail.contains("429"))
     }
 
     @Test
@@ -111,5 +226,71 @@ class GatewayClientTest {
         val encoded = header.removePrefix("Basic ")
         val decoded = String(Base64.decode(encoded, Base64.NO_WRAP))
         assertEquals("opencode:devpassword", decoded)
+    }
+
+    @Test
+    fun blankUsernameSendsOpencodeBasic() {
+        val header = GatewayClient.authHeaders("", "secret")["Authorization"]!!
+        val decoded = String(Base64.decode(header.removePrefix("Basic "), Base64.NO_WRAP))
+        assertEquals("opencode:secret", decoded)
+    }
+
+    @Test
+    fun trimsPasswordBeforeEncoding() {
+        val header = GatewayClient.authHeaders("opencode", " secret \n")["Authorization"]!!
+        val decoded = String(Base64.decode(header.removePrefix("Basic "), Base64.NO_WRAP))
+        assertEquals("opencode:secret", decoded)
+    }
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class GatewayErrorsTest {
+    @Test
+    fun tlsPacketHeaderPointsAtHttp() {
+        val detail = GatewayErrors.describe(
+            statusCode = null,
+            error = javax.net.ssl.SSLHandshakeException("Unable to parse TLS packet header"),
+        )
+        assertTrue(detail.contains("http://"))
+        assertTrue(detail.contains("4096"))
+    }
+
+    @Test
+    fun unauthorizedPointsAtBasicAuth() {
+        val detail = GatewayErrors.describe(401, null, "Unauthorized")
+        assertTrue(detail.contains("opencode"))
+        assertTrue(detail.contains("OPENCODE_SERVER_PASSWORD"))
+    }
+
+    @Test
+    fun unauthorizedUsesProvidedUsername() {
+        val detail = GatewayErrors.describe(401, null, "Unauthorized", username = "myuser")
+        assertTrue(detail.contains("myuser"))
+        assertFalse(detail.contains("opencode"))
+    }
+
+    @Test
+    fun resolveAuthUserDefaultsBlankToOpencode() {
+        assertEquals("opencode", GatewayErrors.resolveAuthUser(""))
+        assertEquals("opencode", GatewayErrors.resolveAuthUser("   "))
+        assertEquals("pi", GatewayErrors.resolveAuthUser(" pi "))
+    }
+
+    @Test
+    fun followUpStormIsUnauthorized() {
+        val detail = GatewayErrors.describe(
+            statusCode = null,
+            error = java.net.ProtocolException("Too many follow-up requests: 21"),
+        )
+        assertTrue(detail.contains("401"))
+        assertTrue(detail.contains("opencode"))
+    }
+
+    @Test
+    fun rateLimitedIsExplicit() {
+        val detail = GatewayErrors.describe(429, null, "too many requests")
+        assertTrue(detail.contains("429"))
+        assertTrue(detail.contains("Wait"))
     }
 }

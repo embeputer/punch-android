@@ -24,14 +24,43 @@ class GatewayClient(
     var sessionId: String? = null
 
     fun health(origin: String, username: String, password: String): GatewayHealth {
-        val url = GatewayUrl.healthUrl(origin)
         return try {
-            val response = exchange("GET", url, username, password, body = null)
-            val ok = response.statusCode in 200..299
-            GatewayHealth(ok = ok, detail = "HTTP ${response.statusCode}")
+            val ping = exchange("GET", GatewayUrl.healthUrl(origin), username, password, body = null)
+            if (ping.statusCode !in 200..299) {
+                return GatewayHealth(
+                    false,
+                    GatewayErrors.describe(ping.statusCode, null, ping.body, username),
+                )
+            }
+            // /health is unauthenticated; POST /session is the supported auth check.
+            val authed = exchange("POST", GatewayUrl.sessionUrl(origin), username, password, body = "{}")
+            if (authed.statusCode !in 200..299) {
+                return GatewayHealth(
+                    false,
+                    GatewayErrors.describe(authed.statusCode, null, authed.body, username),
+                )
+            }
+            val probeSessionId = runCatching { JSONObject(authed.body).optString("id") }.getOrNull()
+            if (!probeSessionId.isNullOrBlank()) {
+                if (sessionId.isNullOrBlank()) {
+                    sessionId = probeSessionId
+                } else {
+                    val abort = exchange(
+                        method = "POST",
+                        url = GatewayUrl.abortUrl(origin, probeSessionId),
+                        username = username,
+                        password = password,
+                        body = "{}",
+                    )
+                    if (abort.statusCode !in 200..299) {
+                        Log.d(TAG, "probe session abort failed: HTTP ${abort.statusCode}")
+                    }
+                }
+            }
+            GatewayHealth(ok = true, detail = "HTTP ${ping.statusCode}")
         } catch (e: Exception) {
             Log.d(TAG, "health failed: ${e.javaClass.simpleName}")
-            GatewayHealth(ok = false, detail = e.message ?: "unreachable")
+            GatewayHealth(ok = false, detail = GatewayErrors.describe(null, e, username = username))
         }
     }
 
@@ -72,9 +101,9 @@ class GatewayClient(
                 password = password,
                 body = payload,
             )
-            return parseAssistant(retry, retrySid)
+            return parseAssistant(retry, retrySid, username)
         }
-        return parseAssistant(response, sid)
+        return parseAssistant(response, sid, username)
     }
 
     fun abort(origin: String, username: String, password: String) {
@@ -113,7 +142,7 @@ class GatewayClient(
         )
         if (response.statusCode !in 200..299) {
             throw GatewayException(
-                message = "Could not create Pi session HTTP ${response.statusCode}",
+                message = GatewayErrors.describe(response.statusCode, null, response.body, username),
                 statusCode = response.statusCode,
             )
         }
@@ -126,12 +155,16 @@ class GatewayClient(
         return id
     }
 
-    private fun parseAssistant(response: GatewayHttpResponse, sid: String): GatewayChatResult {
+    private fun parseAssistant(
+        response: GatewayHttpResponse,
+        sid: String,
+        username: String,
+    ): GatewayChatResult {
         if (response.statusCode !in 200..299) {
             val err = runCatching { JSONObject(response.body).optString("error") }.getOrNull()
             throw GatewayException(
                 message = err?.takeIf { it.isNotBlank() }
-                    ?: "Pi error HTTP ${response.statusCode}",
+                    ?: GatewayErrors.describe(response.statusCode, null, response.body, username),
                 statusCode = response.statusCode,
             )
         }
@@ -158,12 +191,10 @@ class GatewayClient(
         private const val TAG = "PunchPi"
 
         fun authHeaders(username: String, password: String): Map<String, String> {
-            if (username.isBlank() && password.isBlank()) return emptyMap()
-            if (username.isBlank()) {
-                return mapOf("Authorization" to "Bearer $password")
-            }
+            val user = GatewayErrors.resolveAuthUser(username)
+            val pass = password.trim()
             val token = Base64.encodeToString(
-                "$username:$password".toByteArray(Charsets.UTF_8),
+                "$user:$pass".toByteArray(Charsets.UTF_8),
                 Base64.NO_WRAP,
             )
             return mapOf("Authorization" to "Basic $token")
@@ -212,6 +243,8 @@ class UrlConnectionTransport(
     ): GatewayHttpResponse {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
+            instanceFollowRedirects = false
+            useCaches = false
             connectTimeout = connectTimeoutMs
             readTimeout = readTimeoutMs
             doInput = true

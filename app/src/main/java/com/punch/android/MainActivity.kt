@@ -35,6 +35,7 @@ import com.punch.android.data.PunchStore
 import com.punch.android.data.StoredFile
 import com.punch.android.gateway.GatewayClient
 import com.punch.android.gateway.GatewayCredentialsStore
+import com.punch.android.gateway.GatewayErrors
 import com.punch.android.gateway.GatewayException
 import com.punch.android.gateway.GatewayUrl
 import com.punch.android.input.AndroidSpeechTranscriber
@@ -49,6 +50,8 @@ import com.punch.android.ui.theme.PunchTheme
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 class MainActivity : ComponentActivity() {
@@ -58,6 +61,10 @@ class MainActivity : ComponentActivity() {
     private val gatewayClient = GatewayClient()
     private val ioExecutor = Executors.newSingleThreadExecutor()
     private val inFlight = AtomicReference<Future<*>?>(null)
+    private val probeFuture = AtomicReference<Future<*>?>(null)
+    private val probeBusy = AtomicBoolean(false)
+    private val probeGeneration = AtomicLong(0)
+    @Volatile private var lastProbeAtMs = 0L
 
     private val pttState = mutableStateOf(PttUiState.Idle)
     private val micGrantedState = mutableStateOf(false)
@@ -454,14 +461,29 @@ class MainActivity : ComponentActivity() {
             return
         }
         val origin = normalized.getOrThrow()
-        credentialsStore.save(origin, username.trim(), password)
+        val resolvedUser = username.trim().ifBlank { GatewayErrors.DEFAULT_USERNAME }
+        val resolvedPassword = password.trim()
+        val wasConfigured = credentialsStore.isConfigured()
+        val previousOrigin = if (wasConfigured) credentialsStore.getOrigin() else null
+        val previousUser = if (wasConfigured) credentialsStore.getUsername() else null
+        val previousPassword = if (wasConfigured) credentialsStore.getPassword() else null
+        credentialsStore.save(origin, resolvedUser, resolvedPassword)
         gatewayUrlDraft.value = origin
-        gatewayUserDraft.value = username.trim()
-        gatewayKeyDraft.value = password
+        gatewayUserDraft.value = resolvedUser
+        gatewayKeyDraft.value = resolvedPassword
         gatewayPairedState.value = true
-        gatewayClient.sessionId = punchState.value.activeChat()?.sessionId
+        gatewayClient.sessionId = if (
+            wasConfigured &&
+            previousOrigin == origin &&
+            previousUser == resolvedUser &&
+            previousPassword == resolvedPassword
+        ) {
+            punchState.value.activeChat()?.sessionId
+        } else {
+            null
+        }
         gatewayMessageState.value = "Saved. Testing connection…"
-        testGateway(silent = false)
+        testGateway(silent = false, bypassDebounce = true)
     }
 
     private fun clearGateway() {
@@ -476,7 +498,7 @@ class MainActivity : ComponentActivity() {
         gatewayMessageState.value = "Pi pairing cleared"
     }
 
-    private fun testGateway(silent: Boolean) {
+    private fun testGateway(silent: Boolean, bypassDebounce: Boolean = false) {
         if (!credentialsStore.isConfigured()) {
             if (!silent) {
                 gatewayMessageState.value = "Save a Pi gateway URL first"
@@ -484,31 +506,72 @@ class MainActivity : ComponentActivity() {
             connectionStatusState.value = ConnectionStatus.Disconnected
             return
         }
+        val now = System.currentTimeMillis()
+        if (!bypassDebounce && now - lastProbeAtMs < 2_000L) {
+            if (!silent) {
+                gatewayMessageState.value = "Slow down — wait a second before testing again"
+            }
+            return
+        }
+        if (!probeBusy.compareAndSet(false, true)) {
+            if (!silent) {
+                gatewayMessageState.value = "Already testing…"
+            }
+            return
+        }
+        lastProbeAtMs = now
         connectionStatusState.value = ConnectionStatus.Connecting
         if (!silent) {
             gatewayMessageState.value = "Testing…"
         }
-        submitIo {
-            val health = gatewayClient.health(
-                credentialsStore.getOrigin(),
-                credentialsStore.getUsername(),
-                credentialsStore.getPassword(),
-            )
-            runOnUiThread {
-                if (health.ok) {
-                    connectionStatusState.value = ConnectionStatus.Connected
-                    gatewayPairedState.value = true
-                    if (!silent) {
-                        gatewayMessageState.value = "Connected (${health.detail})"
+        probeFuture.getAndSet(null)?.cancel(true)
+        val generation = probeGeneration.get()
+        var future: Future<*>? = null
+        future = ioExecutor.submit {
+            try {
+                val health = gatewayClient.health(
+                    credentialsStore.getOrigin(),
+                    credentialsStore.getUsername(),
+                    credentialsStore.getPassword(),
+                )
+                runOnUiThread {
+                    if (generation != probeGeneration.get()) return@runOnUiThread
+                    if (health.ok) {
+                        connectionStatusState.value = ConnectionStatus.Connected
+                        gatewayPairedState.value = true
+                        if (!silent) {
+                            gatewayMessageState.value = "Connected (${health.detail})"
+                        }
+                    } else {
+                        connectionStatusState.value = ConnectionStatus.Disconnected
+                        if (!silent) {
+                            gatewayMessageState.value = "Unreachable: ${health.detail}"
+                        }
                     }
-                } else {
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "probe ended: ${e.javaClass.simpleName}")
+                runOnUiThread {
+                    if (generation != probeGeneration.get()) return@runOnUiThread
                     connectionStatusState.value = ConnectionStatus.Disconnected
                     if (!silent) {
-                        gatewayMessageState.value = "Unreachable: ${health.detail}"
+                        gatewayMessageState.value = "Unreachable: ${e.message ?: "error"}"
                     }
+                }
+            } finally {
+                if (generation == probeGeneration.get()) {
+                    probeBusy.set(false)
+                    future?.let { probeFuture.compareAndSet(it, null) }
                 }
             }
         }
+        probeFuture.set(requireNotNull(future))
+    }
+
+    private fun cancelProbe() {
+        probeGeneration.incrementAndGet()
+        probeFuture.getAndSet(null)?.cancel(true)
+        probeBusy.set(false)
     }
 
     private fun sendToAgent(prompt: String) {
@@ -628,6 +691,7 @@ class MainActivity : ComponentActivity() {
             gatewayClient.cancel()
         }
         inFlight.getAndSet(null)?.cancel(true)
+        cancelProbe()
         if (connectionStatusState.value == ConnectionStatus.Connecting) {
             connectionStatusState.value =
                 if (credentialsStore.isConfigured()) {
