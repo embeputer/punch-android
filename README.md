@@ -76,12 +76,14 @@ The Pi TypeScript SDK (`createAgentSession`) cannot run on Android. Punch uses t
 
 Auth is HTTP Basic. Username defaults to `opencode`; password is `OPENCODE_SERVER_PASSWORD`. Punch `pi-gateway` on **4096** is **plain HTTP** even over Tailscale — `https://…:4096` will fail with a TLS parse error. Use `https://` only if you terminated TLS (Tailscale Serve on 443).
 
+Plain `http://` is only allowed to Tailscale MagicDNS names (`*.ts.net`) and local names (`*.local`, `*.lan`, `*.home.arpa`, `localhost`, the emulator's `10.0.2.2`); see `app/src/main/res/xml/network_security_config.xml`. Everything else, including raw IP addresses, must use `https://`. A URL typed without a scheme is saved as `https://`. Settings shows a warning while an `http://` gateway is configured, because the password and prompts travel unencrypted outside the Tailscale tunnel.
+
 ### Pair from the phone
 
 1. Run a Pi HTTP gateway on the host (Punch `pi-gateway` on port **4096**, or equivalent).
 2. In Punch, open Settings and enter:
-   - LAN: `http://<host-lan-ip>:4096`
-   - Tailscale: `http://<tailscale-name-or-ip>:4096`
+   - Tailscale: `http://<machine>.<tailnet>.ts.net:4096` (the full MagicDNS name)
+   - LAN: `http://<host>.local:4096` (mDNS name), or `https://` if the gateway terminates TLS
    - Username `opencode` (or leave blank; Punch fills that in)
    - Password = `OPENCODE_SERVER_PASSWORD`
 3. Tap **Save**, then **Test**.

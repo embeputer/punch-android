@@ -1,6 +1,9 @@
 package com.punch.android.gateway
 
 import android.util.Base64
+import java.io.File
+import java.io.IOException
+import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -8,20 +11,89 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.w3c.dom.Element
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewayUrlTest {
     @Test
-    fun acceptsHttpAndHttps() {
-        assertEquals(
-            "http://192.168.1.10:4096",
-            GatewayUrl.normalizeOrigin("http://192.168.1.10:4096").getOrThrow(),
-        )
+    fun acceptsHttpsForAnyHost() {
         assertEquals(
             "https://100.64.0.2:4096",
             GatewayUrl.normalizeOrigin("https://100.64.0.2:4096").getOrThrow(),
         )
+        assertEquals(
+            "https://example.com",
+            GatewayUrl.normalizeOrigin("https://example.com/v1/").getOrThrow(),
+        )
+    }
+
+    @Test
+    fun schemeLessInputDefaultsToHttps() {
+        assertEquals(
+            "https://example.com:4096",
+            GatewayUrl.normalizeOrigin("example.com:4096").getOrThrow(),
+        )
+        assertEquals("https://pi.local:4096", GatewayUrl.normalizeOrigin("pi.local:4096").getOrThrow())
+    }
+
+    @Test
+    fun acceptsHttpForTailnetAndLocalNames() {
+        listOf(
+            "http://pi.tail1234.ts.net:4096",
+            "http://pi.local:4096",
+            "http://pi.lan:4096",
+            "http://pi.home.arpa:4096",
+            "http://localhost:4096",
+            "http://10.0.2.2:4096",
+        ).forEach { url ->
+            assertEquals(url, GatewayUrl.normalizeOrigin(url).getOrThrow())
+        }
+    }
+
+    @Test
+    fun rejectsHttpForOtherHosts() {
+        listOf(
+            "http://example.com:4096",
+            "http://203.0.113.5:4096",
+            "http://192.168.1.10:4096",
+            "http://evilts.net:4096",
+            "http://ts.net.example.com:4096",
+        ).forEach { url ->
+            assertTrue(url, GatewayUrl.normalizeOrigin(url).isFailure)
+        }
+    }
+
+    @Test
+    fun detectsCleartextOrigins() {
+        assertTrue(GatewayUrl.isCleartext("http://pi.local:4096"))
+        assertTrue(GatewayUrl.isCleartext("HTTP://pi.local:4096"))
+        assertFalse(GatewayUrl.isCleartext("https://pi.local:4096"))
+        assertFalse(GatewayUrl.isCleartext(""))
+    }
+
+    @Test
+    fun cleartextAllowlistMatchesNetworkSecurityConfig() {
+        val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(File("src/main/res/xml/network_security_config.xml"))
+        val base = doc.getElementsByTagName("base-config").item(0) as Element
+        assertEquals("false", base.getAttribute("cleartextTrafficPermitted"))
+
+        val withSubdomains = mutableListOf<String>()
+        val exact = mutableListOf<String>()
+        val configs = doc.getElementsByTagName("domain-config")
+        for (i in 0 until configs.length) {
+            val config = configs.item(i) as Element
+            if (config.getAttribute("cleartextTrafficPermitted") != "true") continue
+            val domains = config.getElementsByTagName("domain")
+            for (j in 0 until domains.length) {
+                val domain = domains.item(j) as Element
+                val name = domain.textContent.trim()
+                if (domain.getAttribute("includeSubdomains") == "true") withSubdomains += name else exact += name
+            }
+        }
+        assertEquals(GatewayUrl.CLEARTEXT_DOMAINS.sorted(), withSubdomains.sorted())
+        assertEquals(GatewayUrl.CLEARTEXT_HOSTS.sorted(), exact.sorted())
     }
 
     @Test
@@ -111,6 +183,22 @@ class GatewayClientTest {
                 "POST https://100.64.1.1:4096/session",
             ),
             calls,
+        )
+    }
+
+    @Test
+    fun healthProbeOmitsAuthorizationButSessionCheckSendsIt() {
+        val headersByUrl = mutableMapOf<String, Map<String, String>>()
+        val transport = GatewayTransport { _, url, headers, _ ->
+            headersByUrl[url] = headers
+            GatewayHttpResponse(200, """{"id":"probe-sess"}""")
+        }
+        val health = GatewayClient(transport).health("https://pi.example", "opencode", "secret")
+        assertTrue(health.ok)
+        assertFalse(headersByUrl.getValue("https://pi.example/health").containsKey("Authorization"))
+        assertEquals(
+            GatewayClient.authHeaders("opencode", "secret")["Authorization"],
+            headersByUrl.getValue("https://pi.example/session")["Authorization"],
         )
     }
 
@@ -254,6 +342,15 @@ class GatewayErrorsTest {
         )
         assertTrue(detail.contains("http://"))
         assertTrue(detail.contains("4096"))
+    }
+
+    @Test
+    fun blockedCleartextIsNotReportedAsTlsMismatch() {
+        val detail = GatewayErrors.describe(
+            statusCode = null,
+            error = IOException("Cleartext HTTP traffic to example.com not permitted"),
+        )
+        assertTrue(detail, detail.startsWith("Plain http:// is blocked"))
     }
 
     @Test

@@ -25,7 +25,14 @@ class GatewayClient(
 
     fun health(origin: String, username: String, password: String): GatewayHealth {
         return try {
-            val ping = exchange("GET", GatewayUrl.healthUrl(origin), username, password, body = null)
+            val ping = exchange(
+                method = "GET",
+                url = GatewayUrl.healthUrl(origin),
+                username = username,
+                password = password,
+                body = null,
+                authenticated = false,
+            )
             if (ping.statusCode !in 200..299) {
                 return GatewayHealth(
                     false,
@@ -180,10 +187,11 @@ class GatewayClient(
         username: String,
         password: String,
         body: String?,
+        authenticated: Boolean = true,
     ): GatewayHttpResponse {
         val headers = linkedMapOf("Accept" to "application/json")
         if (body != null) headers["Content-Type"] = "application/json"
-        headers.putAll(authHeaders(username, password))
+        if (authenticated) headers.putAll(authHeaders(username, password))
         return transport.exchange(method, url, headers, body)
     }
 

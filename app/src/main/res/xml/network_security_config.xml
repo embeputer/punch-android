@@ -1,12 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Cleartext HTTP is permitted so the phone can reach a LAN Pi gateway.
-  Prefer HTTPS (e.g. Tailscale) when available.
+  HTTPS everywhere by default. Cleartext HTTP is only allowed to names that resolve
+  inside a Tailscale tailnet or the local network, so the gateway password and prompts
+  never go out in plain text to a public host. Keep in sync with
+  GatewayUrl.CLEARTEXT_DOMAINS.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true">
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">ts.net</domain>
+        <domain includeSubdomains="true">local</domain>
+        <domain includeSubdomains="true">lan</domain>
+        <domain includeSubdomains="true">home.arpa</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
 </network-security-config>

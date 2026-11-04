@@ -31,6 +31,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.punch.android.ConnectionStatus
+import com.punch.android.gateway.GatewayUrl
+import com.punch.android.ui.theme.PunchAmber
 import com.punch.android.ui.theme.PunchInk
 import com.punch.android.ui.theme.PunchIvory
 import com.punch.android.ui.theme.PunchMint
@@ -96,7 +98,7 @@ fun SettingsScreen(
 
         Text("PI", style = MaterialTheme.typography.titleSmall, color = PunchMuted)
         Text(
-            text = "This app sends HTTP Basic (username opencode). Use http:// even over Tailscale — port 4096 is plain HTTP. Password is OPENCODE_SERVER_PASSWORD.",
+            text = "This app sends HTTP Basic (username opencode). Password is OPENCODE_SERVER_PASSWORD. URLs without a scheme use https://. Port 4096 is plain HTTP, so use http://<machine>.<tailnet>.ts.net:4096 over Tailscale; http:// is refused for public hosts.",
             style = MaterialTheme.typography.bodySmall,
             color = PunchMuted,
         )
@@ -124,6 +126,15 @@ fun SettingsScreen(
             colors = fieldColors,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
         )
+        if (GatewayUrl.isCleartext(gatewayUrl)) {
+            Text(
+                text = "Warning: http:// sends your password, prompts and files unencrypted. " +
+                    "Only use it over Tailscale or a network you trust.",
+                style = MaterialTheme.typography.bodySmall,
+                color = PunchAmber,
+                modifier = Modifier.testTag("gateway_cleartext_warning"),
+            )
+        }
         OutlinedTextField(
             value = gatewayUsername,
             onValueChange = onGatewayUsernameChange,
