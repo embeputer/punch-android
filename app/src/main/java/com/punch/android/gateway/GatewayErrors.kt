@@ -23,9 +23,14 @@ object GatewayErrors {
                 cause = cause.cause
             }
         }
+        if (looksLikeCleartextBlocked(blob)) {
+            return "Plain http:// is blocked for this host. Use https://, or a Tailscale " +
+                "(*.ts.net) or local (.local, .lan) name."
+        }
         if (looksLikeTlsToHttp(blob)) {
             return "HTTPS hit a plain HTTP port. Punch's gateway on :4096 is HTTP — " +
-                "use http://<tailscale-name>:4096. Use https:// only if Tailscale Serve is on 443."
+                "use http://<machine>.<tailnet>.ts.net:4096. Use https:// only if Tailscale " +
+                "Serve is on 443."
         }
         if (looksLikeAuthRetryStorm(blob)) {
             return "Unauthorized (401). HTTP Basic was sent as user $authUser; " +
@@ -55,7 +60,9 @@ object GatewayErrors {
         return s.contains("tls packet") ||
             s.contains("wrong_version_number") ||
             s.contains("plaintext") ||
-            s.contains("not an ssl") ||
-            s.contains("cleartext communication")
+            s.contains("not an ssl")
     }
+
+    private fun looksLikeCleartextBlocked(blob: String): Boolean =
+        blob.lowercase().contains("cleartext") && blob.lowercase().contains("not permitted")
 }
